@@ -43,6 +43,7 @@ library
                         Cardano.Api.EraCast
                         Cardano.Api.Protocol.Types
                         Cardano.Api.Shelley
+                        Cardano.Api.Script
                         -- TODO: Eliminate in the future when
                         -- we create wrapper types for the ledger types
                         -- in this module
@@ -75,7 +76,6 @@ library
                         Cardano.Api.OperationalCertificate
                         Cardano.Api.ProtocolParameters
                         Cardano.Api.Query
-                        Cardano.Api.Script
                         Cardano.Api.ScriptData
                         Cardano.Api.SerialiseBech32
                         Cardano.Api.SerialiseCBOR
