@@ -19,11 +19,21 @@ module Gen.Cardano.Api.Typed
   , genByronKeyWitness
   , genShelleyKeyWitness
 
+  , genTxCertificates
+  , genTxFee
   , genTxId
   , genTxIn
+  , genTxInsCollateral
+  , genTxMetadataInEra
   , genTxOutTxContext
   , genTxOutUTxOContext
+  , genTxUpdateProposal
+  , genTxValidityRange
+  , genTxWithdrawals
   , genUTxO
+  , genTxScriptValidity
+  , genTxMintValue
+  , genExecutionUnits
 
     -- * Scripts
   , genReferenceScript
