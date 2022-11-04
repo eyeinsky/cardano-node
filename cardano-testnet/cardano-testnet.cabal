@@ -52,6 +52,7 @@ library
                       , time
                       , transformers
                       , unordered-containers
+                      , cardano-ledger-byron
 
   hs-source-dirs:       src
   exposed-modules:      Test.Assert

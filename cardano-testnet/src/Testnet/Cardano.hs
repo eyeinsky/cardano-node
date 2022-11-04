@@ -24,7 +24,7 @@ module Testnet.Cardano
 
 import           Control.Applicative (pure)
 import           Control.Monad (Monad (..), fmap, forM, forM_, return, void, when, (=<<))
-import           Control.Monad.IO.Class (liftIO)
+import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Data.Aeson ((.=))
 import           Data.Bool (Bool (..))
 import           Data.ByteString.Lazy (ByteString)
@@ -45,11 +45,19 @@ import           Hedgehog.Extras.Stock.IO.Network.Sprocket (Sprocket (..))
 import           Hedgehog.Extras.Stock.Time (formatIso8601, showUTCTimeSeconds)
 import           Ouroboros.Network.PeerSelection.LedgerPeers (UseLedgerAfter (..))
 import           Ouroboros.Network.PeerSelection.RelayAccessPoint (RelayAccessPoint (..))
-import           System.FilePath.Posix ((</>))
+import           System.FilePath.Posix ((</>), FilePath)
 import           Test.Runtime (NodeLoggingFormat (..), PaymentKeyPair (..), PoolNode (PoolNode),
                    PoolNodeKeys (..), TestnetNode (..), TestnetRuntime (..))
 import           Text.Read (Read)
 import           Text.Show (Show (show))
+
+import Cardano.Chain.Genesis (readGenesisData, GenesisData, GenesisHash(unGenesisHash), GenesisDataError)
+import Control.Monad.Trans.Except
+import Prelude (Either(Left, Right), error)
+
+import qualified Data.ByteString as BS
+import qualified Cardano.Crypto.Hash.Class
+import qualified Cardano.Crypto.Hash.Blake2b
 
 import qualified Cardano.Node.Configuration.Topology as NonP2P
 import qualified Cardano.Node.Configuration.TopologyP2P as P2P
@@ -426,6 +434,13 @@ testnet testnetOptions H.Conf {..} = do
     , "--start-time", formatIso8601 startTime
     ]
 
+  -- Add genesis hashes to configuration.yaml
+  byronGenesisHash <- getGenesisHash $ tempAbsPath </> "byron/genesis.json"
+  shelleyGenesisHash <- getGenesisHash $ tempAbsPath </> "shelley/genesis.json"
+  H.rewriteYamlFile (tempAbsPath </> "configuration.yaml") . J.rewriteObject
+    $ HM.insert "ByronGenesisHash" byronGenesisHash
+    . HM.insert "ShelleyGenesisHash" shelleyGenesisHash
+
   -- Then edit the genesis.spec.json ...
 
   -- We're going to use really quick epochs (300 seconds), by using short slots 0.2s
@@ -443,6 +458,13 @@ testnet testnetOptions H.Conf {..} = do
                         . HM.insert "tau" (J.toJSON @Double 0.1)
                         )
       )
+
+  -- Add genesis hashes to configuration.yaml
+  byronGenesisHash <- getGenesisHash $ tempAbsPath </> "byron/genesis.json"
+  shelleyGenesisHash <- getGenesisHash2 $ tempAbsPath </> "shelley/genesis.json"
+  H.rewriteYamlFile (tempAbsPath </> "configuration.yaml") . J.rewriteObject
+    $ HM.insert "ByronGenesisHash" byronGenesisHash
+    . HM.insert "ShelleyGenesisHash" shelleyGenesisHash
 
   -- Now generate for real:
   void $ H.execCli
@@ -863,3 +885,18 @@ testnet testnetOptions H.Conf {..} = do
     , wallets
     , delegators = [] -- TODO this should be populated
     }
+
+getGenesisHash :: (H.MonadTest m, MonadIO m) => FilePath -> m J.Value
+getGenesisHash path = do
+  e <- runExceptT $ readGenesisData path
+  (_, genesisHash) <- H.leftFail e
+  let genesisHash' = J.toJSON $ unGenesisHash genesisHash
+  pure genesisHash'
+
+getGenesisHash2 :: (H.MonadTest m, MonadIO m) => FilePath -> m J.Value
+getGenesisHash2 path = do
+  content <- liftIO $ BS.readFile path
+  -- let genesisHash = Cardano.Crypto.Hash.Class.hashWith id content :: Cardano.Crypto.Hash.Class.Hash Cardano.Crypto.Hash.Blake2b.Blake2b_256 ByteString
+  let genesisHash = Cardano.Crypto.Hash.Class.hashWith id content :: Cardano.Crypto.Hash.Class.Hash Cardano.Crypto.Hash.Blake2b.Blake2b_256 BS.ByteString
+      genesisHash_ = J.toJSON genesisHash
+  pure $ genesisHash_
