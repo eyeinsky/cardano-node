@@ -1,6 +1,4 @@
-{-# LANGUAGE NamedFieldPuns     #-}
 {-# LANGUAGE OverloadedStrings  #-}
-{-# LANGUAGE StandaloneDeriving #-}
 
 module Test.FoldBlocks where
 
@@ -28,7 +26,7 @@ import qualified Util.Base as U
 import qualified Util.Runtime as U
 
 
-data FoldBlocksException = FoldBlocksException C.FoldBlocksError
+newtype FoldBlocksException = FoldBlocksException C.FoldBlocksError
 instance Exception FoldBlocksException
 instance Show FoldBlocksException where
   show (FoldBlocksException a) = TS.unpack $ C.renderFoldBlocksError a
@@ -63,7 +61,8 @@ prop_foldBlocks = U.integration . H.runFinallies . H.workspace "chairman" $ \tem
   -- Get socketPath
   socketPathAbs <- do
     socketPath' <- HE.sprocketArgumentName <$> HE.headM (U.nodeSprocket <$> TN.bftNodes runtime)
-    H.note =<< (liftIO $ IO.canonicalizePath $ TC.tempAbsPath conf </> socketPath')
+    H.note =<< liftIO (IO.canonicalizePath $ TC.tempAbsPath conf </> socketPath')
+
   configurationFile <- H.noteShow $ TC.tempAbsPath conf </> "configuration.yaml"
 
   -- Start foldBlocks in a separate thread
