@@ -35,8 +35,8 @@ tests = pure $ T.testGroup "test/Spec.hs"
       -- as a result of the kes-period-info output to stdout.
       -- TODO: Babbage temporarily ignored due to broken protocol-state query
     , H.disabled "kes-period-info" Test.Cli.KesPeriodInfo.hprop_kes_period_info
-    , Test.FoldBlocks.tests
     ]
+  , Test.FoldBlocks.tests
   ]
 
 ingredients :: [T.Ingredient]
