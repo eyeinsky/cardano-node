@@ -116,7 +116,7 @@ ifaceAddress = "127.0.0.1"
 -- | For an unknown reason, CLI commands are a lot slower on Windows than on Linux and
 -- MacOS.  We need to allow a lot more time to set up a testnet.
 startTimeOffsetSeconds :: DTC.NominalDiffTime
-startTimeOffsetSeconds = if OS.isWin32 then 90 else 15
+startTimeOffsetSeconds = if OS.isWin32 then 90 else 0
 
 
 mkTopologyConfig :: Int -> [Int] -> Int -> Bool -> ByteString
