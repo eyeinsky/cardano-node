@@ -52,8 +52,8 @@ prop_foldBlocks = U.integration . H.runFinallies . H.workspace "chairman" $ \tem
       Nothing
 
   let options = TN.defaultTestnetOptions
-        -- Set opoch to 1 slot, slot to 0.1 seconds
-        { TN.epochLength = 1
+        -- Set opoch to 2 slot, slot to 0.1 seconds
+        { TN.epochLength = 2
         , TN.slotLength = 0.1
         }
   runtime <- TN.cardanoTestnet options conf
