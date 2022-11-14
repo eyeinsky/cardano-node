@@ -7,7 +7,7 @@ import System.FilePath ((</>))
 import qualified System.Directory as IO
 import qualified Control.Concurrent as IO
 import           Control.Monad.Trans.Except (runExceptT)
-import           Control.Monad.IO.Class (liftIO)
+import           Control.Monad.IO.Class (liftIO, MonadIO)
 import qualified Data.Text as TS
 import           Control.Concurrent.Async (async, link)
 import           Control.Exception (Exception, throw)
@@ -25,6 +25,12 @@ import qualified Testnet.Conf as TC (Conf (..), ProjectBase (ProjectBase), YamlF
 import qualified Util.Base as U
 import qualified Util.Runtime as U
 
+-- workspace_
+import qualified System.IO.Temp as IO
+import qualified System.Info as IO
+import qualified System.Environment as IO
+import qualified GHC.Stack as GHC
+import           Control.Monad (when)
 
 newtype FoldBlocksException = FoldBlocksException C.FoldBlocksError
 instance Exception FoldBlocksException
@@ -41,7 +47,7 @@ tests = testGroup "FoldBlocks"
 -- events and block, and on reception writes this to an MVar that main
 -- thread blocks on.
 prop_foldBlocks :: H.Property
-prop_foldBlocks = U.integration . H.runFinallies . H.workspace "chairman" $ \tempAbsBasePath' -> do
+prop_foldBlocks = U.integration . H.runFinallies . workspace_ "chairman" $ \tempAbsBasePath' -> do
 
   -- Start testnet
   base <- HE.noteM $ liftIO . IO.canonicalizePath =<< HE.getProjectBase
@@ -76,3 +82,25 @@ prop_foldBlocks = U.integration . H.runFinallies . H.workspace "chairman" $ \tem
 
   _ <- liftIO $ IO.readMVar lock
   H.assert True
+
+
+-- | Use this instead of H.workspace, which on Cicero gives exception
+--
+-- Exception (SomeAsyncException) 2022-11-14T15:41:20.687206742+00:00
+-- stderr F cardano-testnet-test-cardano-testnet-tests>
+-- ExceptionInLinkedThread (ThreadId 425) pokeSockAddr: path is too
+-- long
+workspace_ :: (H.MonadTest m, MonadIO m, GHC.HasCallStack) => FilePath -> (FilePath -> m ()) -> m ()
+workspace_ prefixPath f = GHC.withFrozenCallStack $ do
+  systemTemp <- case IO.os of
+    "darwin" -> pure "/tmp"
+    _        -> H.evalIO IO.getCanonicalTemporaryDirectory
+  maybeKeepWorkspace <- H.evalIO $ IO.lookupEnv "KEEP_WORKSPACE"
+  let systemPrefixPath = systemTemp <> "/" <> prefixPath
+  H.evalIO $ IO.createDirectoryIfMissing True systemPrefixPath
+  ws <- H.evalIO $ IO.createTempDirectory systemPrefixPath "test"
+  H.annotate $ "Workspace: " <> ws
+  -- liftIO $ IO.writeFile (ws <> "/module") callerModuleName
+  f ws
+  when (IO.os /= "mingw32" && maybeKeepWorkspace /= Just "1") $ do
+    H.evalIO $ IO.removeDirectoryRecursive ws
