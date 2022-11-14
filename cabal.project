@@ -10,7 +10,7 @@ repository cardano-haskell-packages
     c00aae8461a256275598500ea0e187588c35a5d5d7454fb57eac18d9edb86a56
     d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
 
--- See CONTRIBUTING for information about these, including some Nix commands 
+-- See CONTRIBUTING for information about these, including some Nix commands
 -- you need to run if you change them
 index-state: 2022-07-01T00:00:00Z
 index-state: cardano-haskell-packages 2022-10-20T00:00:00Z
@@ -48,8 +48,8 @@ package cardano-node
 package cardano-node-chairman
   ghc-options: -Werror
 
-package cardano-testnet
-  ghc-options: -Werror
+-- package cardano-testnet
+--   ghc-options: -Werror
 
 package tx-generator
   ghc-options: -Werror
@@ -93,7 +93,7 @@ constraints:
   , protolude < 0.3.1
   -- cardano-crypto-wrapper: broken by cardano-prelude-0.1.0.1 which moves HeapWords out
   , cardano-prelude < 0.1.0.1
-  -- cardano-ledger-byron: broken by cardano-binary-1.5.0.1 which includes some functions 
+  -- cardano-ledger-byron: broken by cardano-binary-1.5.0.1 which includes some functions
   -- that used to be in cardano-prelude
   , cardano-binary < 1.5.0.1
   -- ledger: cardano-crypto-class-2.0.0.1 is missing some instances needed by the ledger

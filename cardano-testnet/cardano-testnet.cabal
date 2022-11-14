@@ -83,6 +83,20 @@ library
 
   autogen-modules:      Paths_cardano_testnet
 
+  hs-source-dirs:       test
+  exposed-modules:      Test.FoldBlocks
+  build-depends:        async
+                      , cardano-ledger-byron
+                      , cardano-crypto-class
+                      , streaming
+                      , plutus-tx
+                      , plutus-ledger-api
+                      , plutus-tx-plugin
+                      , serialise
+                      , temporary
+
+  ghc-options:    -fobject-code
+
 executable cardano-testnet
   import:               base, project-config
 

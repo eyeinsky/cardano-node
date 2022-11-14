@@ -32,6 +32,9 @@ import qualified System.Environment as IO
 import qualified GHC.Stack as GHC
 import           Control.Monad (when)
 
+import Test.Tasty (defaultMain)
+
+
 newtype FoldBlocksException = FoldBlocksException C.FoldBlocksError
 instance Exception FoldBlocksException
 instance Show FoldBlocksException where
@@ -83,7 +86,6 @@ prop_foldBlocks = U.integration . H.runFinallies . workspace_ "chairman" $ \temp
   _ <- liftIO $ IO.readMVar lock
   H.assert True
 
-
 -- | Use this instead of H.workspace, which on Cicero gives exception
 --
 -- Exception (SomeAsyncException) 2022-11-14T15:41:20.687206742+00:00
@@ -104,3 +106,6 @@ workspace_ prefixPath f = GHC.withFrozenCallStack $ do
   f ws
   when (IO.os /= "mingw32" && maybeKeepWorkspace /= Just "1") $ do
     H.evalIO $ IO.removeDirectoryRecursive ws
+
+hot :: IO ()
+hot = defaultMain tests
