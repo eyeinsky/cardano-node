@@ -29,6 +29,7 @@ module Cardano.Api.LedgerState
 
     -- * Traversing the block chain
   , foldBlocks
+  , foldBlocksNonPipelined
   , chainSyncClientWithLedgerState
   , chainSyncClientPipelinedWithLedgerState
 
@@ -96,7 +97,7 @@ import           Cardano.Api.Certificate
 import           Cardano.Api.Eras
 import           Cardano.Api.Error
 import           Cardano.Api.IPC (ConsensusModeParams (..),
-                   LocalChainSyncClient (LocalChainSyncClientPipelined),
+                   LocalChainSyncClient (LocalChainSyncClient, LocalChainSyncClientPipelined),
                    LocalNodeClientProtocols (..), LocalNodeClientProtocolsInMode,
                    LocalNodeConnectInfo (..), connectToLocalNode)
 import           Cardano.Api.KeysPraos
@@ -280,6 +281,8 @@ pattern LedgerStateAlonzo st <- LedgerState  (Consensus.LedgerStateAlonzo st)
            , LedgerStateMary
            , LedgerStateAlonzo #-}
 
+-- * FoldBlocks
+
 data FoldBlocksError
   = FoldBlocksInitialLedgerStateError InitialLedgerStateError
   | FoldBlocksApplyBlockError LedgerStateError
@@ -288,6 +291,34 @@ renderFoldBlocksError :: FoldBlocksError -> Text
 renderFoldBlocksError fbe = case fbe of
   FoldBlocksInitialLedgerStateError err -> renderInitialLedgerStateError err
   FoldBlocksApplyBlockError err -> "Failed when applying a block: " <> renderLedgerStateError err
+
+-- | Derive LocalNodeConnectInfo from Env.
+mkConnectInfo :: Env -> FilePath -> LocalNodeConnectInfo CardanoMode
+mkConnectInfo env socketPath = LocalNodeConnectInfo
+  { localConsensusModeParams = cardanoModeParams
+  , localNodeNetworkId       = networkId'
+  , localNodeSocketPath      = socketPath
+  }
+  where
+    -- Derive the NetworkId as described in network-magic.md from the
+    -- cardano-ledger-specs repo.
+    byronConfig
+      = (\(Consensus.WrapPartialLedgerConfig (Consensus.ByronPartialLedgerConfig bc _) :* _) -> bc)
+      . HFC.getPerEraLedgerConfig
+      . HFC.hardForkLedgerConfigPerEra
+      $ envLedgerConfig env
+
+    networkMagic
+      = NetworkMagic
+      $ unProtocolMagicId
+      $ Cardano.Chain.Genesis.gdProtocolMagicId
+      $ Cardano.Chain.Genesis.configGenesisData byronConfig
+
+    networkId' = case Cardano.Chain.Genesis.configReqNetMagic byronConfig of
+      RequiresNoMagic -> Mainnet
+      RequiresMagic -> Testnet networkMagic
+
+    cardanoModeParams = CardanoModeParams . EpochSlots $ 10 * envSecurityParam env
 
 -- | Monadic fold over all blocks and ledger states. Stopping @k@ blocks before
 -- the node's tip where @k@ is the security parameter.
@@ -375,7 +406,7 @@ foldBlocks nodeConfigFilePath socketPath validationMode state0 accumulate = do
     protocols :: IORef a -> IORef (Maybe LedgerStateError) -> Env -> LedgerState -> LocalNodeClientProtocolsInMode CardanoMode
     protocols stateIORef errorIORef env ledgerState =
         LocalNodeClientProtocols {
-          localChainSyncClient    = LocalChainSyncClientPipelined (chainSyncClient 50 stateIORef errorIORef env ledgerState),
+          localChainSyncClient    = LocalChainSyncClientPipelined (chainSyncClient 1 stateIORef errorIORef env ledgerState),
           localTxSubmissionClient = Nothing,
           localStateQueryClient   = Nothing,
           localTxMonitoringClient = Nothing
@@ -420,6 +451,7 @@ foldBlocks nodeConfigFilePath socketPath validationMode state0 accumulate = do
           clientNextN n knownLedgerStates =
             CSP.ClientStNext {
                 CSP.recvMsgRollForward = \blockInMode@(BlockInMode block@(Block (BlockHeader slotNo _ currBlockNo) _) _era) serverChainTip -> do
+                  Prelude.putStrLn "CSP.ClientStNext: CSP.recvMsgRollForward" -- XXX
                   let newLedgerStateE = applyBlock
                         env
                         (maybe
@@ -430,8 +462,11 @@ foldBlocks nodeConfigFilePath socketPath validationMode state0 accumulate = do
                         validationMode
                         block
                   case newLedgerStateE of
-                    Left err -> clientIdle_DoneN n (Just err)
+                    Left err -> do
+                      Prelude.putStrLn $ "CSP.ClientStNext: CSP.recvMsgRollForward: Left err " <> show err -- XXX
+                      clientIdle_DoneN n (Just err)
                     Right newLedgerState -> do
+                      Prelude.putStrLn "CSP.ClientStNext: CSP.recvMsgRollForward: Right newLedgerState" -- XXX
                       let (knownLedgerStates', committedStates) = pushLedgerState env knownLedgerStates slotNo newLedgerState blockInMode
                           newClientTip = At currBlockNo
                           newServerTip = fromChainTip serverChainTip
@@ -481,6 +516,93 @@ foldBlocks nodeConfigFilePath socketPath validationMode state0 accumulate = do
           fromChainTip ct = case ct of
             ChainTipAtGenesis -> Origin
             ChainTip _ _ bno -> At bno
+
+-- | This is a non-pipelined version of 'foldBlocks'
+foldBlocksNonPipelined
+  :: forall a.
+  FilePath
+  -> FilePath
+  -> ValidationMode
+  -> a
+  -> (Env -> LedgerState -> [LedgerEvent] -> BlockInMode CardanoMode -> a -> IO a)
+  -> ExceptT FoldBlocksError IO a
+foldBlocksNonPipelined nodeConfigFilePath socketPath validationMode state0 accumulate = do
+  (env, initialLedgerState') <- withExceptT FoldBlocksInitialLedgerStateError (initialLedgerState nodeConfigFilePath)
+
+  -- Place to store the accumulated state
+  -- This is a bit ugly, but easy.
+  errorIORef <- lift $ newIORef Nothing
+  stateIORef <- lift $ newIORef state0
+
+  let
+    -- | Pre-applied applyBlock to env and validation mode as these don't change over the fold.
+    applyBlock_ :: LedgerState -> Block era -> Either LedgerStateError (LedgerState, [LedgerEvent])
+    applyBlock_ ledgerState block = applyBlock env ledgerState validationMode block
+
+    -- | Defines the client side of the chain sync protocol.
+    chainSyncClient :: LedgerStateHistory -> CS.ChainSyncClient (BlockInMode CardanoMode) ChainPoint ChainTip IO ()
+    chainSyncClient lsh = CS.ChainSyncClient $ pure $ clientIdle_RequestMoreN lsh
+      where
+        clientIdle_RequestMoreN :: LedgerStateHistory -> CS.ClientStIdle (BlockInMode CardanoMode) ChainPoint ChainTip IO ()
+        clientIdle_RequestMoreN knownLedgerStates
+          = let action = clientNextN knownLedgerStates
+          in CS.SendMsgRequestNext action (pure action)
+
+        clientNextN :: LedgerStateHistory -> CS.ClientStNext (BlockInMode CardanoMode) ChainPoint ChainTip IO ()
+        clientNextN knownLedgerStates = CS.ClientStNext
+          { CS.recvMsgRollForward = \blockInMode@(BlockInMode block@(Block (BlockHeader slotNo _ currBlockNo) _) _era) serverChainTip ->
+              CS.ChainSyncClient $ do
+               p $ "New block, (slot, block): " <> show (slotNo, currBlockNo)
+               case applyBlock_ (getLastLedgerState knownLedgerStates) block of
+                Left err -> do
+                  p $ "New block, Left"
+                  clientIdle_DoneN (Just err)
+                Right newLedgerState -> do
+                  p $ "New block, Right"
+                  let (knownLedgerStates', committedStates) = pushLedgerState env knownLedgerStates slotNo newLedgerState blockInMode
+                      newClientTip = At currBlockNo
+                      newServerTip = fromChainTip serverChainTip
+                  p $ "New ledger state, (length lsh, length clsh): " <> show (Prelude.length knownLedgerStates', Prelude.length committedStates)
+                  forM_ committedStates $ \(_, (ledgerState, ledgerEvents), currBlockMay) -> case currBlockMay of
+                      Origin -> return ()
+                      At currBlock -> do
+                        newState <- accumulate env ledgerState ledgerEvents currBlock =<< readIORef stateIORef
+                        writeIORef stateIORef newState
+                  return (clientIdle_RequestMoreN knownLedgerStates')
+          , CS.recvMsgRollBackward = \chainPoint _ -> chainSyncClient $ case chainPoint of
+              ChainPointAtGenesis -> lsh
+              ChainPoint slotNo _ -> rollBackLedgerStateHist knownLedgerStates slotNo
+          }
+
+        clientIdle_DoneN :: Maybe LedgerStateError -> IO (CS.ClientStIdle (BlockInMode CardanoMode) ChainPoint ChainTip IO ())
+        clientIdle_DoneN errorMay = do
+          p $ "clientIdle_DoneN: errorMay " <> show errorMay
+          writeIORef errorIORef errorMay
+          return (CS.SendMsgDone ())
+
+        fromChainTip :: ChainTip -> WithOrigin BlockNo
+        fromChainTip ct = case ct of
+          ChainTipAtGenesis -> Origin
+          ChainTip _ _ bno -> At bno
+
+  -- Connect to the node.
+  lift $ connectToLocalNode (mkConnectInfo env socketPath) $ LocalNodeClientProtocols
+    { localChainSyncClient    = LocalChainSyncClient (chainSyncClient $ singletonLedgerStateHistory initialLedgerState')
+    , localTxSubmissionClient = Nothing
+    , localStateQueryClient   = Nothing
+    , localTxMonitoringClient = Nothing
+    }
+
+  lift $ p "after connectToLocalNode"
+
+  lift (readIORef errorIORef) >>= \case
+    Just err -> throwE (FoldBlocksApplyBlockError err)
+    Nothing -> lift $ readIORef stateIORef
+
+p :: String -> IO ()
+p msg = do
+  Prelude.appendFile "/tmp/xxx/foldBlocksNonPipelined" msg
+  Prelude.putStrLn msg
 
 -- | Wrap a 'ChainSyncClient' with logic that tracks the ledger state.
 chainSyncClientWithLedgerState
@@ -673,6 +795,9 @@ chainSyncClientPipelinedWithLedgerState env ledgerState0 validationMode (CSP.Cha
 type LedgerStateHistory = History LedgerStateEvents
 type History a = Seq (SlotNo, a, WithOrigin (BlockInMode CardanoMode))
 
+singletonLedgerStateHistory :: LedgerState -> LedgerStateHistory
+singletonLedgerStateHistory ledgerState = Seq.singleton (0, (ledgerState, []), Origin)
+
 -- | Add a new ledger state to the history
 pushLedgerState
   :: Env                -- ^ Environment used to get the security param, k.
@@ -694,6 +819,13 @@ pushLedgerState env hist ix st block
 
 rollBackLedgerStateHist :: History a -> SlotNo -> History a
 rollBackLedgerStateHist hist maxInc = Seq.dropWhileL ((> maxInc) . (\(x,_,_) -> x)) hist
+
+getLastLedgerState :: LedgerStateHistory -> LedgerState
+getLastLedgerState ledgerStates = maybe
+  (error "Impossible! Missing Ledger state")
+  (\(_,(ledgerState, _),_) -> ledgerState)
+  (Seq.lookup 0 ledgerStates)
+
 
 --------------------------------------------------------------------------------
 -- Everything below was copied/adapted from db-sync                           --

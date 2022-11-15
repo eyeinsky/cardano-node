@@ -33,8 +33,8 @@ packages:
     trace-resources
     trace-forward
 
-package cardano-api
-  ghc-options: -Werror
+-- package cardano-api
+--   ghc-options: -Werror
 
 package cardano-cli
   ghc-options: -Werror

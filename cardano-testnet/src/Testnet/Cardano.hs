@@ -176,7 +176,7 @@ cardanoTestnet testnetOptions H.Conf {..} = do
   allPorts <- H.noteShowIO $ IO.allocateRandomPorts (L.length allNodeNames)
   nodeToPort <- H.noteShow (M.fromList (L.zip allNodeNames allPorts))
 
-  let securityParam = 10
+  let securityParam = 2
 
   H.createDirectoryIfMissing logDir
 
@@ -754,7 +754,7 @@ cardanoTestnet testnetOptions H.Conf {..} = do
     return $ PoolNode runtime key
 
   now <- H.noteShowIO DTC.getCurrentTime
-  deadline <- H.noteShow $ DTC.addUTCTime 90 now
+  deadline <- H.noteShow $ DTC.addUTCTime 360 now
 
   forM_ allNodeNames $ \node -> do
     sprocket <- H.noteShow $ Sprocket tempBaseAbsPath (socketDir </> node)

@@ -62,8 +62,9 @@ prop_foldBlocks = U.integration . H.runFinallies . workspace_ "chairman" $ \temp
 
   let options = TN.defaultTestnetOptions
         -- Set opoch to 2 slot, slot to 0.1 seconds
-        { TN.epochLength = 2
-        , TN.slotLength = 0.1
+        { TN.epochLength = 8
+        , TN.slotLength = 0.2
+--        , TN.bftNodeOptions = [TN.defaultTestnetNodeOptions]
         }
   runtime <- TN.cardanoTestnet options conf
 
@@ -79,8 +80,9 @@ prop_foldBlocks = U.integration . H.runFinallies . workspace_ "chairman" $ \temp
   liftIO $ do
     a <- async $ do
       let handler _env _ledgerState _ledgerEvents _blockInCardanoMode _ = IO.putMVar lock ()
-      e <- runExceptT (C.foldBlocks configurationFile socketPathAbs  C.QuickValidation () handler)
+      e <- runExceptT (C.foldBlocksNonPipelined configurationFile socketPathAbs  C.QuickValidation () handler)
       either (throw . FoldBlocksException) (\_ -> pure ()) e
+      putStrLn "foldBlocks has finished"
     link a -- Throw foldBlocks threads' exceptions in main thread.
 
   _ <- liftIO $ IO.readMVar lock
@@ -94,6 +96,7 @@ prop_foldBlocks = U.integration . H.runFinallies . workspace_ "chairman" $ \temp
 -- long
 workspace_ :: (H.MonadTest m, MonadIO m, GHC.HasCallStack) => FilePath -> (FilePath -> m ()) -> m ()
 workspace_ prefixPath f = GHC.withFrozenCallStack $ do
+  liftIO $ putStrLn $ "OS is " <> IO.os
   systemTemp <- case IO.os of
     "darwin" -> pure "/tmp"
     _        -> H.evalIO IO.getCanonicalTemporaryDirectory
