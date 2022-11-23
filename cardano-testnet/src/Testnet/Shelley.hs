@@ -63,6 +63,7 @@ import qualified System.Process as IO
 import qualified Test.Base as H
 import qualified Test.Process as H
 import qualified Testnet.Conf as H
+import qualified Testnet.Helpers as TN
 
 {- HLINT ignore "Reduce duplication" -}
 {- HLINT ignore "Redundant <&>" -}
@@ -445,8 +446,7 @@ testnet testnetOptions H.Conf {..} = do
         )
       )
 
-    when (OS.os `L.elem` ["darwin", "linux"]) $ do
-      H.onFailure . H.noteIO_ $ IO.readProcess "lsof" ["-iTCP:" <> portString, "-sTCP:LISTEN", "-n", "-P"] ""
+    TN.noteListeningPort portString
 
   now <- H.noteShowIO DTC.getCurrentTime
   deadline <- H.noteShow $ DTC.addUTCTime 90 now

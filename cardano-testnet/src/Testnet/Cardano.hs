@@ -83,6 +83,7 @@ import qualified Test.Assert as H
 import qualified Test.Process as H
 import qualified Test.Runtime as TR
 import qualified Testnet.Conf as H
+import qualified Testnet.Helpers as TN
 
 {- HLINT ignore "Reduce duplication" -}
 {- HLINT ignore "Redundant <&>" -}
@@ -792,8 +793,7 @@ testnet testnetOptions H.Conf {..} = do
 
     H.noteShowM_ $ H.getPid hProcess
 
-    when (OS.os `L.elem` ["darwin", "linux"]) $ do
-      H.onFailure . H.noteIO_ $ IO.readProcess "lsof" ["-iTCP:" <> portString, "-sTCP:LISTEN", "-n", "-P"] ""
+    TN.noteListeningPort portString
 
     return (sprocket, stdIn, nodeStdoutFile, nodeStderrFile, hProcess)
 
@@ -837,8 +837,7 @@ testnet testnetOptions H.Conf {..} = do
         )
       )
 
-    when (OS.os `L.elem` ["darwin", "linux"]) $ do
-      H.onFailure . H.noteIO_ $ IO.readProcess "lsof" ["-iTCP:" <> portString, "-sTCP:LISTEN", "-n", "-P"] ""
+    TN.noteListeningPort portString
 
     return (sprocket, stdIn, nodeStdoutFile, nodeStderrFile, hProcess)
 
