@@ -183,7 +183,7 @@ mkTopologyConfig numNodes allPorts port True = J.encode topologyP2P
         (P2P.UseLedger DontUseLedger)
 
 testnet :: TestnetOptions -> H.Conf -> H.Integration TestnetRuntime
-testnet testnetOptions H.Conf {..} = do
+testnet testnetOptions conf@(H.Conf {testnetMagic,logDir,tempBaseAbsPath,tempAbsPath,socketDir,base,configurationTemplate}) = do
   void $ H.note OS.os
   currentTime <- H.noteShowIO DTC.getCurrentTime
   startTime <- H.noteShow $ DTC.addUTCTime startTimeOffsetSeconds currentTime
