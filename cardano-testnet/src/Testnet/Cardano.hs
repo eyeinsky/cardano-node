@@ -22,9 +22,10 @@ module Testnet.Cardano
   , testnet
   ) where
 
--- import           Prelude
+import           Prelude (map, snd)
 import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Control.Monad (Monad (..), fmap, forM, forM_, return, void, when, (=<<))
+import           Control.Monad.Catch (MonadCatch)
 import           Control.Applicative (pure)
 import           Data.Aeson ((.=))
 import           Data.Bool (Bool (..))
@@ -544,200 +545,17 @@ testnet testnetOptions conf@(H.Conf {testnetMagic,logDir,tempBaseAbsPath,tempAbs
   -- Generated node operator keys (cold, hot) and operational certs
   forM_ allNodeNames $ \node -> H.noteEachM_ . H.listDirectory $ tempAbsPath </> node </> "byron"
 
-  -- Make some payment and stake addresses
-  -- user1..n:       will own all the funds in the system, we'll set this up from
-  --                 initial utxo the
-  -- pool-owner1..n: will be the owner of the pools and we'll use their reward
-  --                 account for pool rewards
-  let userAddrs = ("user" <>) . show @Int <$> userPoolN
-      poolAddrs = ("pool-owner" <>) . show @Int <$> poolNodesN
-      addrs = userAddrs <> poolAddrs
 
-
-  H.createDirectoryIfMissing $ tempAbsPath </> "addresses"
-
-  wallets <- forM addrs $ \addr -> do
-    let paymentSKey = tempAbsPath </> "addresses/" <> addr <> ".skey"
-    let paymentVKey = tempAbsPath </> "addresses/" <> addr <> ".vkey"
-
-    -- Payment address keys
-    void $ H.execCli
-      [ "address", "key-gen"
-      , "--verification-key-file", paymentVKey
-      , "--signing-key-file", paymentSKey
-      ]
-
-    void $ H.execCli
-      [ "address", "key-gen"
-      , "--verification-key-file", tempAbsPath </> "shelley/utxo-keys/utxo2.vkey"
-      , "--signing-key-file", tempAbsPath </> "shelley/utxo-keys/utxo2.skey"
-      ]
-
-    void $ H.execCli
-      [ "stake-address", "key-gen"
-      , "--verification-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.vkey"
-      , "--signing-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.skey"
-      ]
-
-    void $ H.execCli
-      [ "stake-address", "key-gen"
-      , "--verification-key-file", tempAbsPath </> "shelley/utxo-keys/utxo-stake.vkey"
-      , "--signing-key-file", tempAbsPath </> "shelley/utxo-keys/utxo-stake.skey"
-      ]
-
-    void $ H.execCli
-      [ "stake-address", "key-gen"
-      , "--verification-key-file", tempAbsPath </> "shelley/utxo-keys/utxo2-stake.vkey"
-      , "--signing-key-file", tempAbsPath </> "shelley/utxo-keys/utxo2-stake.skey"
-      ]
-
-    -- Payment addresses
-    void $ H.execCli
-      [ "address", "build"
-      , "--payment-verification-key-file", tempAbsPath </> "addresses/" <> addr <> ".vkey"
-      , "--stake-verification-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.vkey"
-      , "--testnet-magic", show @Int testnetMagic
-      , "--out-file", tempAbsPath </> "addresses/" <> addr <> ".addr"
-      ]
-
-    -- Stake addresses
-    void $ H.execCli
-      [ "stake-address", "build"
-      , "--stake-verification-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.vkey"
-      , "--testnet-magic", show @Int testnetMagic
-      , "--out-file", tempAbsPath </> "addresses/" <> addr <> "-stake.addr"
-      ]
-
-    -- Stake addresses registration certs
-    void $ H.execCli
-      [ "stake-address", "registration-certificate"
-      , "--stake-verification-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.vkey"
-      , "--out-file", tempAbsPath </> "addresses/" <> addr <> "-stake.reg.cert"
-      ]
-
-    pure $ PaymentKeyPair
-      { paymentSKey
-      , paymentVKey
-      }
-
-  -- user N will delegate to pool N
-  forM_ userPoolN $ \n -> do
-    -- Stake address delegation certs
-    void $ H.execCli
-      [ "stake-address", "delegation-certificate"
-      , "--stake-verification-key-file", tempAbsPath </> "addresses/user" <> show @Int n <> "-stake.vkey"
-      , "--cold-verification-key-file", tempAbsPath </> "node-pool" <> show @Int n </> "shelley/operator.vkey"
-      , "--out-file", tempAbsPath </> "addresses/user" <> show @Int n <> "-stake.deleg.cert"
-      ]
-
-    H.createFileLink (tempAbsPath </> "addresses/pool-owner" <> show @Int n <> "-stake.vkey") (tempAbsPath </> "node-pool" <> show @Int n </> "owner.vkey")
-    H.createFileLink (tempAbsPath </> "addresses/pool-owner" <> show @Int n <> "-stake.skey") (tempAbsPath </> "node-pool" <> show @Int n </> "owner.skey")
-
-  -- Generated payment address keys, stake address keys,
-  -- stake address registration certs, and stake address delegation certs
-  H.noteEachM_ . H.listDirectory $ tempAbsPath </> "addresses"
-
-  -- Next is to make the stake pool registration cert
-  forM_ poolNodeNames $ \node -> do
-    H.execCli
-      [ "stake-pool", "registration-certificate"
-      , "--testnet-magic", show @Int testnetMagic
-      , "--pool-pledge", "0", "--pool-cost", "0", "--pool-margin", "0"
-      , "--cold-verification-key-file", tempAbsPath </> node </> "shelley/operator.vkey"
-      , "--vrf-verification-key-file", tempAbsPath </> node </> "shelley/vrf.vkey"
-      , "--reward-account-verification-key-file", tempAbsPath </> node </> "owner.vkey"
-      , "--pool-owner-stake-verification-key-file", tempAbsPath </> node </> "owner.vkey"
-      , "--out-file", tempAbsPath </> node </> "registration.cert"
-      ]
-
-  -- Generated stake pool registration certs
-  forM_ poolNodeNames $ \node -> H.assertIO . IO.doesFileExist $ tempAbsPath </> node </> "registration.cert"
-
-  -- Now we'll construct one whopper of a transaction that does everything
-  -- just to show off that we can, and to make the script shorter
-
-  do
-    -- We'll transfer all the funds to the user1, which delegates to pool1
-    -- We'll register certs to:
-    --  1. register the pool-owner1 stake address
-    --  2. register the stake pool 1
-    --  3. register the user1 stake address
-    --  4. delegate from the user1 stake address to the stake pool
-    txIn <- H.noteShow . S.strip =<< H.execCli
-      [ "genesis", "initial-txin"
-      , "--testnet-magic", show @Int testnetMagic
-      , "--verification-key-file", tempAbsPath </> "shelley/utxo-keys/utxo1.vkey"
-      ]
-
-    H.note_ txIn
-
-    user1Addr <- H.readFile $ tempAbsPath </> "addresses/user1.addr"
-
-    void $ H.execCli
-      [ "transaction", "build-raw"
-      , "--invalid-hereafter", "1000"
-      , "--fee", "0"
-      , "--tx-in", txIn
-      , "--tx-out",  user1Addr <> "+" <> show @Int maxShelleySupply
-      , "--certificate-file", tempAbsPath </> "addresses/pool-owner1-stake.reg.cert"
-      , "--certificate-file", tempAbsPath </> "node-pool1/registration.cert"
-      , "--certificate-file", tempAbsPath </> "addresses/user1-stake.reg.cert"
-      , "--certificate-file", tempAbsPath </> "addresses/user1-stake.deleg.cert"
-      , "--out-file", tempAbsPath </> "tx1.txbody"
-      ]
-  -- TODO: this will become the transaction to register the pool, etc.
-  -- We'll need to pick the tx-in from the actual UTxO since it contains the txid,
-  -- we'll have to query this via cardano-cli query utxo.
-
-  {-  cardano-cli transaction build-raw \
-          --invalid-hereafter 1000000 --fee 0 \
-          --tx-in 67209bfcdf78f8cd86f649da75053a80fb9bb3fad68465554f9301c31b496c65#0 \
-          --tx-out $(cat example/addresses/user1.addr)+450000000 \
-          --certificate-file example/addresses/pool-owner1-stake.reg.cert \
-          --certificate-file example/node-pool1/registration.cert \
-          --certificate-file example/addresses/user1-stake.reg.cert \
-          --certificate-file example/addresses/user1-stake.deleg.cert \
-          --out-file example/register-pool.txbody
+  -- TODO: The following transaction is never executed, so let's not
+  -- generate it at all!
+  {-
+  let addrsAndWallets = makeAddressAndKeypairPaths tempAbsPath poolNodesN
+  _ <- generateKeyPairs conf addrsAndWallets
+  _ <- createTx1 conf poolNodeNames poolNodesN maxShelleySupply
+  let wallets = map snd addrsAndWallets
   -}
+  let wallets = []
 
-  {-  cardano-cli address convert \
-          --byron-key-file example/byron/payment-keys.000.key \
-          --signing-key-file example/byron/payment-keys.000-converted.key
-  -}
-
-  {-  cardano-cli transaction sign \
-          --tx-body-file example/register-pool.txbody \
-          --testnet-magic 42 \
-          --signing-key-file example/byron/payment-keys.000-converted.key \
-          --signing-key-file example/shelley/utxo-keys/utxo1.skey \
-          --signing-key-file example/addresses/user1-stake.skey \
-          --signing-key-file example/node-pool1/owner.skey \
-          --signing-key-file example/node-pool1/shelley/operator.skey \
-          --out-file example/register-pool.tx
-  -}
-
-  {-  cardano-cli transaction submit \
-          --tx-file example/register-pool.tx --testnet-magic 42
-  -}
-
-  -- So we'll need to sign this with a bunch of keys:
-  -- 1. the initial utxo spending key, for the funds
-  -- 2. the user1 stake address key, due to the delegation cert
-  -- 3. the pool1 owner key, due to the pool registration cert
-  -- 3. the pool1 operator key, due to the pool registration cert
-  void $ H.execCli
-    [ "transaction", "sign"
-    , "--signing-key-file", tempAbsPath </> "shelley/utxo-keys/utxo1.skey"
-    , "--signing-key-file", tempAbsPath </> "addresses/user1-stake.skey"
-    , "--signing-key-file", tempAbsPath </> "node-pool1/owner.skey"
-    , "--signing-key-file", tempAbsPath </> "node-pool1/shelley/operator.skey"
-    , "--testnet-magic", show @Int testnetMagic
-    , "--tx-body-file", tempAbsPath </> "tx1.txbody"
-    , "--out-file", tempAbsPath </> "tx1.tx"
-    ]
-
-  -- Generated a signed 'do it all' transaction:
-  H.assertIO . IO.doesFileExist $ tempAbsPath </> "tx1.tx"
 
   -- Add Byron, Shelley and Alonzo genesis hashes to node configuration
   byronGenesisHash <- getByronGenesisHash $ tempAbsPath </> "byron/genesis.json"
@@ -877,6 +695,217 @@ testnet testnetOptions conf@(H.Conf {testnetMagic,logDir,tempBaseAbsPath,tempAbs
     , wallets
     , delegators = [] -- TODO this should be populated
     }
+
+-- * Tx 1
+
+-- Make some payment and stake addresses
+-- user1..n:       will own all the funds in the system, we'll set this up from
+--                 initial utxo the
+-- pool-owner1..n: will be the owner of the pools and we'll use their reward
+--                 account for pool rewards
+makeAddressAndKeypairPaths :: IO.FilePath -> [Int] -> [(IO.FilePath, PaymentKeyPair)]
+makeAddressAndKeypairPaths tempAbsPath poolNodesN = let
+  userPoolN = poolNodesN
+  userAddrs = ("user" <>) . show @Int <$> userPoolN
+  poolAddrs = ("pool-owner" <>) . show @Int <$> poolNodesN
+  addrs = userAddrs <> poolAddrs
+  in flip map addrs $ \addr -> let
+        paymentSKey = tempAbsPath </> "addresses/" <> addr <> ".skey"
+        paymentVKey = tempAbsPath </> "addresses/" <> addr <> ".vkey"
+        in (addr, PaymentKeyPair { paymentSKey, paymentVKey })
+
+generateKeyPairs
+  :: (H.MonadTest m, MonadCatch m, MonadIO m)
+  => H.Conf -> [(IO.FilePath, PaymentKeyPair)] -> m ()
+generateKeyPairs H.Conf{tempAbsPath,testnetMagic} addrsAndWallets = do
+
+  H.createDirectoryIfMissing $ tempAbsPath </> "addresses"
+
+  forM_ addrsAndWallets $ \(addr, PaymentKeyPair { paymentSKey, paymentVKey }) -> do
+
+    -- Payment address keys
+    void $ H.execCli
+      [ "address", "key-gen"
+      , "--verification-key-file", paymentVKey
+      , "--signing-key-file", paymentSKey
+      ]
+
+    void $ H.execCli
+      [ "address", "key-gen"
+      , "--verification-key-file", tempAbsPath </> "shelley/utxo-keys/utxo2.vkey"
+      , "--signing-key-file", tempAbsPath </> "shelley/utxo-keys/utxo2.skey"
+      ]
+
+    void $ H.execCli
+      [ "stake-address", "key-gen"
+      , "--verification-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.vkey"
+      , "--signing-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.skey"
+      ]
+
+    void $ H.execCli
+      [ "stake-address", "key-gen"
+      , "--verification-key-file", tempAbsPath </> "shelley/utxo-keys/utxo-stake.vkey"
+      , "--signing-key-file", tempAbsPath </> "shelley/utxo-keys/utxo-stake.skey"
+      ]
+
+    void $ H.execCli
+      [ "stake-address", "key-gen"
+      , "--verification-key-file", tempAbsPath </> "shelley/utxo-keys/utxo2-stake.vkey"
+      , "--signing-key-file", tempAbsPath </> "shelley/utxo-keys/utxo2-stake.skey"
+      ]
+
+    -- Payment addresses
+    void $ H.execCli
+      [ "address", "build"
+      , "--payment-verification-key-file", tempAbsPath </> "addresses/" <> addr <> ".vkey"
+      , "--stake-verification-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.vkey"
+      , "--testnet-magic", show @Int testnetMagic
+      , "--out-file", tempAbsPath </> "addresses/" <> addr <> ".addr"
+      ]
+
+    -- Stake addresses
+    void $ H.execCli
+      [ "stake-address", "build"
+      , "--stake-verification-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.vkey"
+      , "--testnet-magic", show @Int testnetMagic
+      , "--out-file", tempAbsPath </> "addresses/" <> addr <> "-stake.addr"
+      ]
+
+    -- Stake addresses registration certs
+    void $ H.execCli
+      [ "stake-address", "registration-certificate"
+      , "--stake-verification-key-file", tempAbsPath </> "addresses/" <> addr <> "-stake.vkey"
+      , "--out-file", tempAbsPath </> "addresses/" <> addr <> "-stake.reg.cert"
+      ]
+
+createTx1
+  :: (H.MonadTest m, MonadCatch m, MonadIO m)
+  => H.Conf -> [IO.FilePath] -> [Int] -> Int -> m IO.FilePath
+createTx1 conf@(H.Conf{testnetMagic, tempAbsPath}) poolNodeNames poolNodesN lovelaceOut = do
+  let userPoolN = poolNodesN
+
+  -- user N will delegate to pool N
+  forM_ userPoolN $ \n -> do
+    -- Stake address delegation certs
+    void $ H.execCli
+      [ "stake-address", "delegation-certificate"
+      , "--stake-verification-key-file", tempAbsPath </> "addresses/user" <> show @Int n <> "-stake.vkey"
+      , "--cold-verification-key-file", tempAbsPath </> "node-pool" <> show @Int n </> "shelley/operator.vkey"
+      , "--out-file", tempAbsPath </> "addresses/user" <> show @Int n <> "-stake.deleg.cert"
+      ]
+
+    H.createFileLink (tempAbsPath </> "addresses/pool-owner" <> show @Int n <> "-stake.vkey") (tempAbsPath </> "node-pool" <> show @Int n </> "owner.vkey")
+    H.createFileLink (tempAbsPath </> "addresses/pool-owner" <> show @Int n <> "-stake.skey") (tempAbsPath </> "node-pool" <> show @Int n </> "owner.skey")
+
+  -- Generated payment address keys, stake address keys,
+  -- stake address registration certs, and stake address delegation certs
+  H.noteEachM_ . H.listDirectory $ tempAbsPath </> "addresses"
+
+  -- Next is to make the stake pool registration cert
+  forM_ poolNodeNames $ \node -> do
+    H.execCli
+      [ "stake-pool", "registration-certificate"
+      , "--testnet-magic", show @Int testnetMagic
+      , "--pool-pledge", "0", "--pool-cost", "0", "--pool-margin", "0"
+      , "--cold-verification-key-file", tempAbsPath </> node </> "shelley/operator.vkey"
+      , "--vrf-verification-key-file", tempAbsPath </> node </> "shelley/vrf.vkey"
+      , "--reward-account-verification-key-file", tempAbsPath </> node </> "owner.vkey"
+      , "--pool-owner-stake-verification-key-file", tempAbsPath </> node </> "owner.vkey"
+      , "--out-file", tempAbsPath </> node </> "registration.cert"
+      ]
+
+  -- Generated stake pool registration certs
+  forM_ poolNodeNames $ \node -> H.assertIO . IO.doesFileExist $ tempAbsPath </> node </> "registration.cert"
+
+  -- Now we'll construct one whopper of a transaction that does everything
+  -- just to show off that we can, and to make the script shorter
+
+  do
+    -- We'll transfer all the funds to the user1, which delegates to pool1
+    -- We'll register certs to:
+    --  1. register the pool-owner1 stake address
+    --  2. register the stake pool 1
+    --  3. register the user1 stake address
+    --  4. delegate from the user1 stake address to the stake pool
+    txIn <- H.noteShow . S.strip =<< H.execCli
+      [ "genesis", "initial-txin"
+      , "--testnet-magic", show @Int testnetMagic
+      , "--verification-key-file", tempAbsPath </> "shelley/utxo-keys/utxo1.vkey"
+      ]
+
+    H.note_ txIn
+
+    user1Addr <- H.readFile $ tempAbsPath </> "addresses/user1.addr"
+
+    void $ H.execCli
+      [ "transaction", "build-raw"
+      , "--invalid-hereafter", "1000"
+      , "--fee", "0"
+      , "--tx-in", txIn
+      , "--tx-out",  user1Addr <> "+" <> show @Int lovelaceOut
+      , "--certificate-file", tempAbsPath </> "addresses/pool-owner1-stake.reg.cert"
+      , "--certificate-file", tempAbsPath </> "node-pool1/registration.cert"
+      , "--certificate-file", tempAbsPath </> "addresses/user1-stake.reg.cert"
+      , "--certificate-file", tempAbsPath </> "addresses/user1-stake.deleg.cert"
+      , "--out-file", tempAbsPath </> "tx1.txbody"
+      ]
+  -- TODO: this will become the transaction to register the pool, etc.
+  -- We'll need to pick the tx-in from the actual UTxO since it contains the txid,
+  -- we'll have to query this via cardano-cli query utxo.
+
+  {-  cardano-cli transaction build-raw \
+          --invalid-hereafter 1000000 --fee 0 \
+          --tx-in 67209bfcdf78f8cd86f649da75053a80fb9bb3fad68465554f9301c31b496c65#0 \
+          --tx-out $(cat example/addresses/user1.addr)+450000000 \
+          --certificate-file example/addresses/pool-owner1-stake.reg.cert \
+          --certificate-file example/node-pool1/registration.cert \
+          --certificate-file example/addresses/user1-stake.reg.cert \
+          --certificate-file example/addresses/user1-stake.deleg.cert \
+          --out-file example/register-pool.txbody
+  -}
+
+  {-  cardano-cli address convert \
+          --byron-key-file example/byron/payment-keys.000.key \
+          --signing-key-file example/byron/payment-keys.000-converted.key
+  -}
+
+  {-  cardano-cli transaction sign \
+          --tx-body-file example/register-pool.txbody \
+          --testnet-magic 42 \
+          --signing-key-file example/byron/payment-keys.000-converted.key \
+          --signing-key-file example/shelley/utxo-keys/utxo1.skey \
+          --signing-key-file example/addresses/user1-stake.skey \
+          --signing-key-file example/node-pool1/owner.skey \
+          --signing-key-file example/node-pool1/shelley/operator.skey \
+          --out-file example/register-pool.tx
+  -}
+
+  {-  cardano-cli transaction submit \
+          --tx-file example/register-pool.tx --testnet-magic 42
+  -}
+
+  -- So we'll need to sign this with a bunch of keys:
+  -- 1. the initial utxo spending key, for the funds
+  -- 2. the user1 stake address key, due to the delegation cert
+  -- 3. the pool1 owner key, due to the pool registration cert
+  -- 3. the pool1 operator key, due to the pool registration cert
+  void $ H.execCli
+    [ "transaction", "sign"
+    , "--signing-key-file", tempAbsPath </> "shelley/utxo-keys/utxo1.skey"
+    , "--signing-key-file", tempAbsPath </> "addresses/user1-stake.skey"
+    , "--signing-key-file", tempAbsPath </> "node-pool1/owner.skey"
+    , "--signing-key-file", tempAbsPath </> "node-pool1/shelley/operator.skey"
+    , "--testnet-magic", show @Int testnetMagic
+    , "--tx-body-file", tempAbsPath </> "tx1.txbody"
+    , "--out-file", tempAbsPath </> "tx1.tx"
+    ]
+
+  -- Generated a signed 'do it all' transaction:
+  H.assertIO . IO.doesFileExist $ tempAbsPath </> "tx1.tx"
+
+  pure $ tempAbsPath </> "tx1.tx"
+
+
 
 -- * Generate hashes for genesis.json files
 
