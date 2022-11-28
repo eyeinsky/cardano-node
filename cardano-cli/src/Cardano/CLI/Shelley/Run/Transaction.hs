@@ -1318,38 +1318,32 @@ runTxCalculateMinFee (TxBodyFile txbodyFile) nw protocolParamsSourceSpec
                      (TxByronWitnessCount nByronKeyWitnesses) = do
 
     unwitnessed <- readFileTxBody txbodyFile
-    pparams <- readProtocolParametersSourceSpec protocolParamsSourceSpec
     case unwitnessed of
       IncompleteCddlFormattedTx anyTx -> do
         InAnyShelleyBasedEra _era unwitTx <-
           onlyInShelleyBasedEras "sign for Byron era transactions" anyTx
-        let txbody =  getTxBody unwitTx
-        let tx = makeSignedTransaction [] txbody
-            Lovelace fee = estimateTransactionFee
-                             (fromMaybe Mainnet nw)
-                             (protocolParamTxFeeFixed pparams)
-                             (protocolParamTxFeePerByte pparams)
-                             tx
-                             nInputs nOutputs
-                             nByronKeyWitnesses nShelleyKeyWitnesses
-
-        liftIO $ putStrLn $ (show fee :: String) <> " Lovelace"
+        printFee $ getTxBody unwitTx
 
       UnwitnessedCliFormattedTxBody anyTxBody -> do
         InAnyShelleyBasedEra _era txbody <-
               --TODO: in principle we should be able to support Byron era txs too
               onlyInShelleyBasedEras "calculate-min-fee for Byron era transactions" anyTxBody
+        printFee txbody
 
-        let tx = makeSignedTransaction [] txbody
-            Lovelace fee = estimateTransactionFee
-                             (fromMaybe Mainnet nw)
-                             (protocolParamTxFeeFixed pparams)
-                             (protocolParamTxFeePerByte pparams)
-                             tx
-                             nInputs nOutputs
-                             nByronKeyWitnesses nShelleyKeyWitnesses
-
-        liftIO $ putStrLn $ (show fee :: String) <> " Lovelace"
+  where
+    printFee :: IsShelleyBasedEra era => TxBody era -> ExceptT ShelleyTxCmdError IO ()
+    printFee txbody = do
+      pparams <- readProtocolParametersSourceSpec protocolParamsSourceSpec
+      let
+        tx = makeSignedTransaction [] txbody
+        Lovelace fee = estimateTransactionFee
+          (fromMaybe Mainnet nw)
+          (protocolParamTxFeeFixed pparams)
+          (protocolParamTxFeePerByte pparams)
+          tx
+          nInputs nOutputs
+          nByronKeyWitnesses nShelleyKeyWitnesses
+      liftIO $ putStrLn $ (show fee :: String) <> " Lovelace"
 
 -- ----------------------------------------------------------------------------
 -- Transaction fee calculation
