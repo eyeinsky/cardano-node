@@ -64,6 +64,7 @@ library
                         Testnet.Byron
                         Testnet.Cardano
                         Testnet.Conf
+                        Testnet.Helpers
                         Testnet.List
                         Testnet.Shelley
                         Testnet.SubmitApi
